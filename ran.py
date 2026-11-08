@@ -3,10 +3,13 @@ File Organizer - sorts files by extension.
 
 Usage:
     python organizer.py
+    python organizer.py --dry-run
+    python organizer.py --undo
 
 See README.md for Task Scheduler setup.
 """
 import argparse
+import json
 import os
 import shutil
 from datetime import datetime
@@ -20,6 +23,8 @@ BASE = Path(os.getenv("ORGANIZER_BASE", Path.home() / "Downloads"))
 
 LOGS = Path(os.getenv("ORGANIZER_LOGS", Path.home() / "Desktop" / "my_orgnizer"))
 LOGS.mkdir(exist_ok=True, parents=True)
+
+HISTORY = LOGS / 'history.json'
 
 DESTINATIONS = {
     # Documents
@@ -66,6 +71,20 @@ DESTINATIONS = {
     ".apk": "Apps",
 }
 
+def load_history() -> list:
+    if not HISTORY.exists():
+        return []
+    try:
+        with open(HISTORY, encoding='utf-8') as f:
+            return json.load(f)
+    except json.JSONDecodeError:
+        print("History file is corrupt, starting again!")
+        return []
+    
+def save_history(history: list) -> None:
+    with open(HISTORY, 'w', encoding='utf-8') as f:
+        json.dump(history, f, indent=2, ensure_ascii=False)
+
 def organize(dry_run: bool = False) -> None:
 
     now = datetime.now()
@@ -76,6 +95,7 @@ def organize(dry_run: bool = False) -> None:
     moved = set()
     skipped = set()
     existed = set()
+    moved_pairs = []
 
     try:
         for item in BASE.iterdir():
@@ -97,10 +117,12 @@ def organize(dry_run: bool = False) -> None:
             if dry_run:
                 print(f"[DRY] {item.name} → {folder_name}/")
                 moved.add(item.name)
+                moved_pairs.append((item.name, folder_name))
             else:    
                 try:
                     shutil.move(str(item), str(dst))
                     moved.add(item.name)
+                    moved_pairs.append((item.name, folder_name))
                 except OSError as e:
                     print(f'Failed: {item.name} error: {e}')
                     skipped.add(item.name)
@@ -115,6 +137,13 @@ def organize(dry_run: bool = False) -> None:
         if dry_run:
             print("\n DRY RUN - No files were moved!")
             return
+
+        history = load_history()
+        history.append({
+            "date": now.isoformat(),
+            "moved": [[name, folder] for name, folder in moved_pairs]
+        })
+        save_history(history)
 
         lines = []
         lines.append('=' * 50)
@@ -156,6 +185,51 @@ def organize(dry_run: bool = False) -> None:
     except (shutil.Error, OSError) as e:
         print(f'Error: {e}')
 
+
+
+
+def undo() -> None:
+    history = load_history()
+    if not history:
+        print("No history to undo!")
+        return
+    last = history.pop()
+    now = datetime.now()
+    lines = [
+        "=" * 50,
+        f"Undo at: {now:%Y-%m-%d %H:%M:%S}",
+        f"Original run: {last['date']}",
+        "=" * 50,
+        "",
+    ]
+    count = 0
+    for name, folder in last["moved"]:
+        src = BASE / folder / name
+        dst = BASE / name
+        if not src.exists():
+            lines.append(f"⚠️ SKIPPED (not found): {folder}/{name}")
+            continue
+
+        try:
+            shutil.move(str(src), str(dst))
+            lines.append(f"↩️ Restored: {folder}/{name} → {name}")
+            count += 1
+        except OSError as e:
+            lines.append(f"❌ FAILED: {folder}/{name} | {e}")
+
+    lines.append("")
+    lines.append("-" * 50)
+    lines.append(f"Total restored: {count} / {len(last['moved'])}")
+    lines.append("=" * 50)
+    lines.append("")
+
+    log = LOGS / "Undo.log"
+    with open(log, "a", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+    save_history(history)
+    print(f"✅ Restored {count} files → {log.name}")
+
 def main():
     parser = argparse.ArgumentParser(description="File Organizer By Extensions")
     parser.add_argument(
@@ -163,10 +237,13 @@ def main():
         action='store_true',
         help='Show What would be moved, existed and skipped.(no actual move)',
     )
+    parser.add_argument('--undo', action='store_true', help='Restore everthing that is moved.')
     args = parser.parse_args()
 
-    organize(dry_run=args.dry_run)
-
+    if args.undo:
+        undo()
+    else:    
+        organize(dry_run=args.dry_run)
 
 if __name__ == '__main__':
     main()

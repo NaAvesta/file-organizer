@@ -28,6 +28,10 @@ A Python script that organizes files by extension.
 
 Preview what would be moved without actually moving anything:
 
+### Undo (restore)
+
+Restore the last organize operation:
+
 ## License
 
 MIT
