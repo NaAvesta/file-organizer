@@ -6,7 +6,7 @@ Usage:
 
 See README.md for Task Scheduler setup.
 """
-
+import argparse
 import os
 import shutil
 from datetime import datetime
@@ -66,7 +66,7 @@ DESTINATIONS = {
     ".apk": "Apps",
 }
 
-def organize():
+def organize(dry_run: bool = False) -> None:
 
     now = datetime.now()
 
@@ -93,17 +93,28 @@ def organize():
             if dst.exists():
                 existed.add(item.name)
                 continue
-            try:
-                shutil.move(str(item), str(dst))
-                moved.add(item.name)
-            except OSError as e:
-                print(f'Failed: {item.name} error: {e}')    
 
+            if dry_run:
+                print(f"[DRY] {item.name} → {folder_name}/")
+                moved.add(item.name)
+            else:    
+                try:
+                    shutil.move(str(item), str(dst))
+                    moved.add(item.name)
+                except OSError as e:
+                    print(f'Failed: {item.name} error: {e}')
+                    skipped.add(item.name)
+
+        label = "Would move" if dry_run else "Moved"
         print("-" * 50)
-        print(f"Moved: {len(moved)}")
+        print(f"{label}: {len(moved)}")
         print(f"Existed: {len(existed)}")
         print(f"Skipped: {len(skipped)}")
         print("-" * 50)
+
+        if dry_run:
+            print("\n DRY RUN - No files were moved!")
+            return
 
         lines = []
         lines.append('=' * 50)
@@ -144,7 +155,18 @@ def organize():
 
     except (shutil.Error, OSError) as e:
         print(f'Error: {e}')
-        skipped.add(item.name)
+
+def main():
+    parser = argparse.ArgumentParser(description="File Organizer By Extensions")
+    parser.add_argument(
+        '--dry-run',
+        action='store_true',
+        help='Show What would be moved, existed and skipped.(no actual move)',
+    )
+    args = parser.parse_args()
+
+    organize(dry_run=args.dry_run)
+
 
 if __name__ == '__main__':
-    organize()
+    main()

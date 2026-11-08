@@ -24,6 +24,10 @@ A Python script that organizes files by extension.
    - Start in: project folder
 6. Properties: Run whether user is logged on or not
 
+### Dry run
+
+Preview what would be moved without actually moving anything:
+
 ## License
 
 MIT
@@ -32,3 +36,4 @@ MIT
 
 ```bash
 - python organizer.py
+ 
