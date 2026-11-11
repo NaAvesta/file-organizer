@@ -24,13 +24,17 @@ A Python script that organizes files by extension.
    - Start in: project folder
 6. Properties: Run whether user is logged on or not
 
-### Dry run
+# Organize a folder
+python organizer.py <folder>
 
-Preview what would be moved without actually moving anything:
+# Dry run (preview only)
+python organizer.py <folder> --dry-run
 
-### Undo (restore)
+# Undo last operation (any folder)
+python organizer.py --undo
 
-Restore the last organize operation:
+# Undo last operation for a specific folder
+python organizer.py --undo [folder]
 
 ## License
 

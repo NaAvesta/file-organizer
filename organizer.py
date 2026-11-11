@@ -2,9 +2,9 @@
 File Organizer - sorts files by extension.
 
 Usage:
-    python organizer.py
-    python organizer.py --dry-run
-    python organizer.py --undo
+    python organizer.py <folder>
+    python organizer.py <folder> --dry-run
+    python organizer.py --undo [folder]
 
 See README.md for Task Scheduler setup.
 """
@@ -76,39 +76,43 @@ def load_history() -> list:
         return []
     try:
         with open(HISTORY, encoding='utf-8') as f:
-            return json.load(f)
+            data = json.load(f)
     except json.JSONDecodeError:
         print("History file is corrupt, starting again!")
         return []
+
+    if not isinstance(data, list):
+        print("History file has invalid format, starting again!")
+        return []
+
+    return data
     
 def save_history(history: list) -> None:
     with open(HISTORY, 'w', encoding='utf-8') as f:
         json.dump(history, f, indent=2, ensure_ascii=False)
 
-def organize(dry_run: bool = False) -> None:
-
+def organize(folder: Path, dry_run: bool = False) -> None:
+    folder = Path(folder).resolve()
     now = datetime.now()
 
-    for folder in set(DESTINATIONS.values()):
-        (BASE / folder).mkdir(exist_ok=True, parents=True)
-
     moved = set()
-    skipped = set()
+    skipped_unknown = set()
+    skipped_failed = set()
     existed = set()
     moved_pairs = []
 
     try:
-        for item in BASE.iterdir():
+        for item in folder.iterdir():
             if not item.is_file():
                 continue
 
             ext = item.suffix.lower()
             folder_name = DESTINATIONS.get(ext)
             if not folder_name:
-                skipped.add(item.name)
+                skipped_unknown.add(item.name)
                 continue
 
-            dst = BASE / folder_name / item.name
+            dst = folder / folder_name / item.name
 
             if dst.exists():
                 existed.add(item.name)
@@ -118,40 +122,48 @@ def organize(dry_run: bool = False) -> None:
                 print(f"[DRY] {item.name} → {folder_name}/")
                 moved.add(item.name)
                 moved_pairs.append((item.name, folder_name))
-            else:    
+            else:
+                (folder / folder_name).mkdir(exist_ok=True, parents=True)
                 try:
                     shutil.move(str(item), str(dst))
                     moved.add(item.name)
                     moved_pairs.append((item.name, folder_name))
                 except OSError as e:
                     print(f'Failed: {item.name} error: {e}')
-                    skipped.add(item.name)
+                    skipped_failed.add(item.name)
 
         label = "Would move" if dry_run else "Moved"
         print("-" * 50)
         print(f"{label}: {len(moved)}")
         print(f"Existed: {len(existed)}")
-        print(f"Skipped: {len(skipped)}")
+        print(f"Skipped (unknown): {len(skipped_unknown)}")
+        print(f"Failed: {len(skipped_failed)}")
         print("-" * 50)
 
         if dry_run:
             print("\n DRY RUN - No files were moved!")
             return
-
-        history = load_history()
-        history.append({
-            "date": now.isoformat(),
-            "moved": [[name, folder] for name, folder in moved_pairs]
-        })
-        save_history(history)
-
+        if moved_pairs:
+            history = load_history()
+            history.append({
+                "date": now.isoformat(),
+                "base": str(folder),
+                "moved": [[name, folder] for name, folder in moved_pairs]
+            })
+            try:
+                save_history(history)
+            except OSError as e:
+                print(f"⚠️ Warning: could not update history | {e}")
+                print("   You may need to run --undo again or fix history.json manually")
+    
         lines = []
         lines.append('=' * 50)
         lines.append(f'Runtime: {now:%Y-%m-%d %H:%M:%S}')
+        lines.append(f"Folder: {folder}")
         lines.append('=' * 50)
 
-        for folder in sorted(set(DESTINATIONS.values())):
-            path = BASE / folder
+        for subfolder in sorted(set(DESTINATIONS.values())):
+            path = folder / subfolder
             if not path.exists():
                 continue
 
@@ -159,7 +171,7 @@ def organize(dry_run: bool = False) -> None:
             if not files:
                 continue
 
-            lines.append(f'📁 {folder}/')
+            lines.append(f'📁 {subfolder}/')
             for f in sorted(files, key=lambda p: p.name.lower()):
                 if f.name in moved:
                     lines.append(f'✅ {f.name} | MOVED | {now:%H:%M:%S}')
@@ -167,10 +179,15 @@ def organize(dry_run: bool = False) -> None:
                     lines.append(f'⏸️ {f.name} | EXISTED')
             lines.append("")
 
-        if skipped:
-            lines.append("Skipped (remain in root):")
-            for name in sorted(skipped, key=str.lower):
-                lines.append(f"❌ {name}")
+        if skipped_unknown:
+            lines.append("Skipped (unknown extension):")
+            for name in sorted(skipped_unknown, key=str.lower):
+                lines.append(f"  ❌ {name}")
+            lines.append("")
+        if skipped_failed:
+            lines.append("Failed (move error):")
+            for name in sorted(skipped_failed, key=str.lower):
+                lines.append(f"  ❌ {name}")
             lines.append("")
 
         log = LOGS / "Report.log"
@@ -185,15 +202,29 @@ def organize(dry_run: bool = False) -> None:
     except (shutil.Error, OSError) as e:
         print(f'Error: {e}')
 
-
-
-
-def undo() -> None:
+def undo(target_folder=None):
     history = load_history()
     if not history:
         print("No history to undo!")
         return
-    last = history.pop()
+    if target_folder is not None:
+        target = Path(target_folder).resolve()
+        idx = None
+        for i in range(len(history) -1, -1, -1):
+            record_base = Path(history[i].get('base', str(BASE))).resolve()
+            if record_base == target:
+                idx = i
+                break
+
+        if idx is None:
+            print(f"❌ No history for folder: {target_folder}")
+            return
+        
+        last = history.pop(idx)
+    else:
+        last = history.pop()
+    
+    base = Path(last.get("base", str(BASE)))
     now = datetime.now()
     lines = [
         "=" * 50,
@@ -204,8 +235,8 @@ def undo() -> None:
     ]
     count = 0
     for name, folder in last["moved"]:
-        src = BASE / folder / name
-        dst = BASE / name
+        src = base / folder / name
+        dst = base / name
         if not src.exists():
             lines.append(f"⚠️ SKIPPED (not found): {folder}/{name}")
             continue
@@ -217,6 +248,23 @@ def undo() -> None:
         except OSError as e:
             lines.append(f"❌ FAILED: {folder}/{name} | {e}")
 
+    removed_folders = []
+    if base.exists():
+        for subfolder in set(DESTINATIONS.values()):
+            subpath = base / subfolder
+            if subpath.exists() and subpath.is_dir():
+                try:
+                    subpath.rmdir()
+                    removed_folders.append(subfolder)
+                except OSError:
+                    pass
+
+    if removed_folders:
+        lines.append("")
+        lines.append("Removed empty folders:")
+        for name in sorted(removed_folders):
+            lines.append(f"  🧹 {name}/")
+
     lines.append("")
     lines.append("-" * 50)
     lines.append(f"Total restored: {count} / {len(last['moved'])}")
@@ -227,23 +275,57 @@ def undo() -> None:
     with open(log, "a", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
 
-    save_history(history)
+    try:
+        save_history(history)
+    except OSError as e:
+        print(f"⚠️ Warning: could not update history | {e}")
+        print("   You may need to fix history.json manually")
     print(f"✅ Restored {count} files → {log.name}")
 
 def main():
     parser = argparse.ArgumentParser(description="File Organizer By Extensions")
     parser.add_argument(
+        'folder',
+        nargs='?',
+        help='Folder to organize'
+    )
+    parser.add_argument(
         '--dry-run',
         action='store_true',
         help='Show What would be moved, existed and skipped.(no actual move)',
     )
-    parser.add_argument('--undo', action='store_true', help='Restore everthing that is moved.')
+    parser.add_argument(
+        '--undo',
+        nargs='?',
+        const=True,
+        default=False,
+        metavar='FOLDER',
+        help='Undo last operation (optionally for a specific folder)'
+    )
     args = parser.parse_args()
 
     if args.undo:
-        undo()
-    else:    
-        organize(dry_run=args.dry_run)
+        if args.undo is True:
+            undo()
+        else:
+            undo(Path(args.undo))    
+        return
+
+    if args.folder is None:
+        print("❌ Error: folder is required.")
+        print("   Usage: python organizer.py <folder> [--dry-run]")
+        print("          python organizer.py --undo")
+        return
+
+    folder = Path(args.folder)
+    if not folder.exists():
+        print(f"❌ Folder not found: {folder}")
+        return
+    if not folder.is_dir():
+        print(f"❌ Not a folder: {folder}")
+        return
+
+    organize(folder, dry_run=args.dry_run)
 
 if __name__ == '__main__':
     main()
